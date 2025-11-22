@@ -12,38 +12,86 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
     
+    # Drop existing tables for clean slate (as per plan)
+    c.execute("DROP TABLE IF EXISTS registrations")
+    c.execute("DROP TABLE IF EXISTS events")
+    c.execute("DROP TABLE IF EXISTS settings")
+
+    # Events table
+    c.execute('''CREATE TABLE IF NOT EXISTS events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        date TEXT,
+        is_open BOOLEAN DEFAULT 0,
+        seat_limit INTEGER DEFAULT 35
+    )''')
+    
     # Registrations table
     c.execute('''CREATE TABLE IF NOT EXISTS registrations (
-        user_id INTEGER PRIMARY KEY,
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        event_id INTEGER,
         username TEXT,
         full_name TEXT,
         is_admin BOOLEAN DEFAULT 0,
         is_neuling BOOLEAN DEFAULT 0,
         partner_name TEXT,
         status TEXT DEFAULT 'PENDING',
-        registration_time TIMESTAMP
+        registration_time TIMESTAMP,
+        FOREIGN KEY(event_id) REFERENCES events(id),
+        UNIQUE(user_id, event_id)
     )''')
-    
-    # Settings table
-    c.execute('''CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-    )''')
-    
-    # Initialize registration status if not exists
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('registration_open', '1')")
     
     conn.commit()
     conn.close()
 
-def add_registration(user_id, username, full_name, is_neuling, partner_name):
+# --- Event Operations ---
+
+def create_event(name, seat_limit=35):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute("INSERT INTO events (name, seat_limit) VALUES (?, ?)", (name, seat_limit))
+        event_id = c.lastrowid
+        conn.commit()
+        return event_id
+    finally:
+        conn.close()
+
+def get_events():
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM events")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_event(event_id):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM events WHERE id = ?", (event_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def set_event_open(event_id, is_open):
+    conn = get_connection()
+    c = conn.cursor()
+    val = 1 if is_open else 0
+    c.execute("UPDATE events SET is_open = ? WHERE id = ?", (val, event_id))
+    conn.commit()
+    conn.close()
+
+# --- Registration Operations ---
+
+def add_registration(user_id, event_id, username, full_name, is_neuling, partner_name):
     conn = get_connection()
     c = conn.cursor()
     try:
         c.execute('''INSERT INTO registrations 
-                     (user_id, username, full_name, is_neuling, partner_name, registration_time, status)
-                     VALUES (?, ?, ?, ?, ?, ?, 'PENDING')''',
-                  (user_id, username, full_name, is_neuling, partner_name, datetime.datetime.now()))
+                     (user_id, event_id, username, full_name, is_neuling, partner_name, registration_time, status)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'PENDING')''',
+                  (user_id, event_id, username, full_name, is_neuling, partner_name, datetime.datetime.now()))
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -51,72 +99,61 @@ def add_registration(user_id, username, full_name, is_neuling, partner_name):
     finally:
         conn.close()
 
-def get_registration(user_id):
+def get_registration(user_id, event_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM registrations WHERE user_id = ?", (user_id,))
+    c.execute("SELECT * FROM registrations WHERE user_id = ? AND event_id = ?", (user_id, event_id))
     row = c.fetchone()
     conn.close()
     return row
 
-def update_status(user_id, status):
+def get_user_registrations(user_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("UPDATE registrations SET status = ? WHERE user_id = ?", (status, user_id))
+    c.execute('''
+        SELECT r.*, e.name as event_name 
+        FROM registrations r 
+        JOIN events e ON r.event_id = e.id 
+        WHERE r.user_id = ?
+    ''', (user_id,))
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def update_status(user_id, event_id, status):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("UPDATE registrations SET status = ? WHERE user_id = ? AND event_id = ?", (status, user_id, event_id))
     conn.commit()
     conn.close()
 
-def get_all_registrations():
+def get_event_registrations(event_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM registrations")
+    c.execute("SELECT * FROM registrations WHERE event_id = ?", (event_id,))
     rows = c.fetchall()
     conn.close()
     return rows
 
-def get_pending_registrations():
+def get_pending_registrations(event_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT * FROM registrations WHERE status = 'PENDING'")
+    c.execute("SELECT * FROM registrations WHERE event_id = ? AND status = 'PENDING'", (event_id,))
     rows = c.fetchall()
     conn.close()
     return rows
 
-def get_accepted_count():
+def get_waiting_list(event_id):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM registrations WHERE status = 'ACCEPTED'")
-    count = c.fetchone()[0]
-    conn.close()
-    return count
-
-def get_waiting_list():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM registrations WHERE status = 'WAITING' ORDER BY registration_time ASC")
+    c.execute("SELECT * FROM registrations WHERE event_id = ? AND status = 'WAITING' ORDER BY registration_time ASC", (event_id,))
     rows = c.fetchall()
     conn.close()
     return rows
 
-def is_registration_open():
+def set_admin(user_id, event_id, is_admin):
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key = 'registration_open'")
-    row = c.fetchone()
-    conn.close()
-    return row and row['value'] == '1'
-
-def set_registration_open(is_open):
-    conn = get_connection()
-    c = conn.cursor()
-    val = '1' if is_open else '0'
-    c.execute("UPDATE settings SET value = ? WHERE key = 'registration_open'", (val,))
-    conn.commit()
-    conn.close()
-
-def set_admin(user_id, is_admin):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE registrations SET is_admin = ? WHERE user_id = ?", (is_admin, user_id))
+    c.execute("UPDATE registrations SET is_admin = ? WHERE user_id = ? AND event_id = ?", (is_admin, user_id, event_id))
     conn.commit()
     conn.close()

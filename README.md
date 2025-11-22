@@ -23,24 +23,26 @@ A Telegram bot for managing event registrations with automatic seat allocation.
 
 ### User Commands
 -   `/start`: Welcome message.
--   `/register`: Register for the event. You will be asked if you are a "Neuling" and if you have a partner.
--   `/status`: Check your registration status.
--   `/cancel`: Cancel your registration.
+-   `/register`: Register for an event. If multiple events are open, you will be asked to select one.
+-   `/status`: Check your registration status for all events.
+-   `/cancel`: Cancel your registration for a specific event.
 
 ### Admin Commands
--   `/admin_open`: Open registration.
--   `/admin_close`: Close registration and run the seat allocation algorithm.
+-   `/create_event <name>`: Create a new event (e.g., `/create_event Stammtisch Dec`).
+-   `/admin_open`: Open registration for a specific event.
+-   `/admin_close`: Close registration for a specific event and run the seat allocation algorithm.
+-   `/admin_list`: View registrations for a specific event.
 
 ## Seat Allocation Logic
-When `/admin_close` is run:
+When `/admin_close` is run for an event:
 1.  **Admins**: Automatically accepted (plus their partner).
 2.  **Neulings**: Automatically accepted (plus their partner).
-3.  **Random**: Remaining seats (up to 35 total) are filled randomly from the remaining applicants.
+3.  **Random**: Remaining seats (up to 35 per event) are filled randomly from the remaining applicants.
     -   Partners are treated as a unit: either both get in, or neither (if only 1 seat remains).
-4.  **Waiting List**: Everyone else is moved to the waiting list.
+4.  **Waiting List**: Everyone else is moved to the waiting list for that event.
 
 ## Cancellation
 If an accepted user cancels:
 1.  Their status becomes `CANCELLED`.
-2.  The first person on the waiting list is notified.
+2.  The first person on the waiting list for that event is notified.
 3.  They receive a message with "Accept" / "Deny" buttons.
