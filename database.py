@@ -23,9 +23,17 @@ def init_db():
         name TEXT NOT NULL,
         date TEXT,
         is_open BOOLEAN DEFAULT 0,
-        seat_limit INTEGER DEFAULT 4
+        seat_limit INTEGER DEFAULT 35
     )''')
     
+    # Users table (global registry of all users who started the bot)
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        username TEXT,
+        full_name TEXT,
+        last_seen TIMESTAMP
+    )''')
+
     # Registrations table
     c.execute('''CREATE TABLE IF NOT EXISTS registrations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,3 +165,31 @@ def set_admin(user_id, event_id, is_admin):
     c.execute("UPDATE registrations SET is_admin = ? WHERE user_id = ? AND event_id = ?", (is_admin, user_id, event_id))
     conn.commit()
     conn.close()
+
+# --- User Operations ---
+
+def upsert_user(user_id, username, full_name):
+    conn = get_connection()
+    c = conn.cursor()
+    try:
+        c.execute('''INSERT OR REPLACE INTO users (user_id, username, full_name, last_seen)
+                     VALUES (?, ?, ?, ?)''', 
+                  (user_id, username, full_name, datetime.datetime.now()))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_user_by_username(username):
+    if not username:
+        return None
+    # Remove @ if present
+    if username.startswith('@'):
+        username = username[1:]
+        
+    conn = get_connection()
+    c = conn.cursor()
+    # Case insensitive search
+    c.execute("SELECT * FROM users WHERE LOWER(username) = ?", (username.lower(),))
+    row = c.fetchone()
+    conn.close()
+    return row

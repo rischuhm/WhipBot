@@ -50,13 +50,13 @@ async def create_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     if not context.args:
-        await update.message.reply_text("Usage: /create_event <Event Name>")
+        await update.message.reply_text("Verwendung: /create_event <Event Name>")
         return
         
     name = " ".join(context.args)
-    # Default seat limit is 4 for testing (was 35)
-    event_id = db.create_event(name, seat_limit=4)
-    await update.message.reply_text(f"Event '{name}' created with ID {event_id}. Seat limit: 4")
+    # Default seat limit is 35
+    event_id = db.create_event(name, seat_limit=35)
+    await update.message.reply_text(f"Event '{name}' erstellt mit ID {event_id}. Sitzplatzlimit: 35")
 
 async def admin_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -64,7 +64,7 @@ async def admin_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if update.effective_chat.type != 'private':
-        await update.message.reply_text("Please perform admin actions in a private chat.")
+        await update.message.reply_text("Bitte führe Admin-Aktionen im privaten Chat aus.")
         return
     
     events = db.get_events()
@@ -72,7 +72,7 @@ async def admin_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     closed_events = [e for e in events if not e['is_open']]
     
     if not closed_events:
-        await update.message.reply_text("No closed events found to open.")
+        await update.message.reply_text("Keine geschlossenen Events zum Öffnen gefunden.")
         return
         
     keyboard = []
@@ -80,7 +80,7 @@ async def admin_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(e['name'], callback_data=f"admin_open_{e['id']}")])
         
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Select an event to OPEN:", reply_markup=reply_markup)
+    await update.message.reply_text("Wähle ein Event zum ÖFFNEN:", reply_markup=reply_markup)
 
 async def admin_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -88,7 +88,7 @@ async def admin_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if update.effective_chat.type != 'private':
-        await update.message.reply_text("Please perform admin actions in a private chat.")
+        await update.message.reply_text("Bitte führe Admin-Aktionen im privaten Chat aus.")
         return
     
     events = db.get_events()
@@ -96,7 +96,7 @@ async def admin_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_events = [e for e in events if e['is_open']]
     
     if not open_events:
-        await update.message.reply_text("No open events found to close.")
+        await update.message.reply_text("Keine offenen Events zum Schließen gefunden.")
         return
         
     keyboard = []
@@ -104,7 +104,7 @@ async def admin_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(e['name'], callback_data=f"admin_close_{e['id']}")])
         
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Select an event to CLOSE:", reply_markup=reply_markup)
+    await update.message.reply_text("Wähle ein Event zum SCHLIESSEN:", reply_markup=reply_markup)
 
 async def admin_event_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -116,22 +116,22 @@ async def admin_event_response(update: Update, context: ContextTypes.DEFAULT_TYP
     event = db.get_event(event_id)
     
     if not event:
-        await query.edit_message_text("Event not found.")
+        await query.edit_message_text("Event nicht gefunden.")
         return
 
     if action == 'admin_open':
         db.set_event_open(event_id, True)
-        await query.edit_message_text(f"Registration for '{event['name']}' is now OPEN.")
+        await query.edit_message_text(f"Registrierung für '{event['name']}' ist jetzt GEÖFFNET.")
         
     elif action == 'admin_close':
         db.set_event_open(event_id, False)
-        await query.edit_message_text(f"Registration for '{event['name']}' CLOSED. Calculating seats...")
+        await query.edit_message_text(f"Registrierung für '{event['name']}' GESCHLOSSEN. Berechne Plätze...")
         await perform_allocation(update, context, event_id)
         
     elif action == 'admin_list':
         registrations = db.get_event_registrations(event_id)
         if not registrations:
-            await query.edit_message_text(f"No registrations found for '{event['name']}'.")
+            await query.edit_message_text(f"Keine Registrierungen für '{event['name']}' gefunden.")
             return
 
         count = 0
@@ -149,14 +149,14 @@ async def admin_event_response(update: Update, context: ContextTypes.DEFAULT_TYP
                 # Correct logic:
                 # If partner_name is present AND partner is NOT in the list as a separate user, add +1.
         
-        msg = f"📋 *Registrations for {event['name']} ({count} seats):*\n\n"
+        msg = f"📋 *Registrierungen für {event['name']} ({count} Plätze):*\n\n"
         for reg in registrations:
             icon = "✅" if reg['status'] == 'ACCEPTED' else "⏳" if reg['status'] == 'PENDING' else "❌" if reg['status'] == 'CANCELLED' else "📝"
             safe_name = escape_md(reg['full_name'])
             safe_username = escape_md(reg['username'])
             safe_partner = escape_md(reg['partner_name'])
             
-            partner_str = f" (Partner: {safe_partner})" if safe_partner else ""
+            partner_str = f" (Begleitung: {safe_partner})" if safe_partner else ""
             neuling = " [Neuling]" if reg['is_neuling'] else ""
             admin = " [Admin]" if reg['is_admin'] else ""
             
@@ -274,7 +274,7 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if r['user_id'] not in accepted_ids:
             db.update_status(r['user_id'], event_id, 'WAITING')
             try:
-                await context.bot.send_message(chat_id=r['user_id'], text=f"Registration for '{event['name']}' closed. You are on the WAITING list.")
+                await context.bot.send_message(chat_id=r['user_id'], text=f"⏳ Registrierung für '{event['name']}' geschlossen.\n\nDu bist auf der *WARTELISTE*. Wir benachrichtigen dich, falls ein Platz frei wird! 🤞")
             except Exception as e:
                 logging.error(f"Failed to send message to {r['user_id']}: {e}")
 
@@ -283,19 +283,19 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             # Find registration to check for partner
             reg = next((r for r in pending if r['user_id'] == uid), None)
-            msg = f"Congratulations! You have a seat for '{event['name']}'."
+            msg = f"🎉 *Glückwunsch!* 🎉\n\nDu hast einen Platz für '{event['name']}'! Wir freuen uns auf dich! 🙌"
             
             if reg and reg['partner_name']:
                 partner_reg = find_partner(reg['partner_name'], pending)
                 if not partner_reg:
                     # Partner was not registered, so we inform the user they are both in
-                    msg += f"\n\nYour partner ({reg['partner_name']}) is also accepted!"
+                    msg += f"\n\n👥 Deine Begleitung ({reg['partner_name']}) ist auch dabei!"
             
             await context.bot.send_message(chat_id=uid, text=msg)
         except Exception as e:
             logging.error(f"Failed to send message to {uid}: {e}")
             
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Allocation for '{event['name']}' complete. {seats_taken} seats taken.")
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Zuteilung für '{event['name']}' abgeschlossen. {seats_taken} Plätze vergeben.")
 
 async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -308,7 +308,7 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     events = db.get_events()
     if not events:
-        await update.message.reply_text("No events found.")
+        await update.message.reply_text("Keine Events gefunden.")
         return
 
     keyboard = []
@@ -316,23 +316,18 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(e['name'], callback_data=f"admin_list_{e['id']}")])
         
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Select an event to view registrations:", reply_markup=reply_markup)
+    await update.message.reply_text("Wähle ein Event, um die Registrierungen zu sehen:", reply_markup=reply_markup)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.args and context.args[0] == 'register':
-        # Trigger registration flow manually
-        # We need to call register(update, context) but return the state
-        # However, start is not the entry point of the ConversationHandler in the current setup.
-        # We can't easily jump into the ConversationHandler from here without refactoring.
-        # Simplest way: Tell them to type /register now that they are here.
-        await update.message.reply_text("Welcome! Please type /register to start the registration process.")
-        return
+
 
     await update.message.reply_text(
-        "Welcome to the Event Planner Bot!\n"
-        "Use /register to sign up for the event.\n"
-        "Use /status to check your registration status.\n"
-        "Use /cancel to cancel your registration."
+        "Willkommen beim WHIP Wizard Bot! 🧙‍♂️\n\n"
+        "Hier ist eine kurze Anleitung:\n"
+        "1️⃣ **Registrieren**: Nutze /register, um dich für ein Event anzumelden. Du kannst angeben, ob du neu bist ('Neuling') und ob du jemanden mitbringst.\n"
+        "2️⃣ **Status prüfen**: Mit /status siehst du, für welche Events du angemeldet bist und ob du einen Platz hast.\n"
+        "3️⃣ **Abmelden**: Falls du doch nicht kannst, nutze /cancel, um deinen Platz freizugeben.\n\n"
+        "Viel Spaß!"
     )
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -340,14 +335,14 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if update.effective_chat.type != 'private':
         bot_username = context.bot.username
-        await update.message.reply_text(f"Please register with me privately: t.me/{bot_username}?start=register")
+        await update.message.reply_text(f"Bitte registriere dich privat bei mir: t.me/{bot_username}?start=register")
         return ConversationHandler.END
 
     events = db.get_events()
     open_events = [e for e in events if e['is_open']]
     
     if not open_events:
-        await update.message.reply_text("No events are currently open for registration.")
+        await update.message.reply_text("Aktuell sind keine Events für die Registrierung geöffnet.")
         return ConversationHandler.END
         
     if len(open_events) == 1:
@@ -360,7 +355,7 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for e in open_events:
         keyboard.append([InlineKeyboardButton(e['name'], callback_data=f"event_{e['id']}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Please select an event to register for:", reply_markup=reply_markup)
+    await update.message.reply_text("Bitte wähle ein Event für die Registrierung:", reply_markup=reply_markup)
     return ASK_EVENT
 
 async def event_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -371,13 +366,13 @@ async def event_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event = db.get_event(event_id)
     
     if not event or not event['is_open']:
-        await query.edit_message_text("This event is no longer open.")
+        await query.edit_message_text("Dieses Event ist nicht mehr geöffnet.")
         return ConversationHandler.END
         
     context.user_data['event_id'] = event_id
     context.user_data['event_name'] = event['name']
     
-    await query.edit_message_text(f"Selected: {event['name']}")
+    await query.edit_message_text(f"Ausgewählt: {event['name']}")
     return await ask_neuling(update, context)
 
 async def ask_neuling(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -386,7 +381,7 @@ async def ask_neuling(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     existing = db.get_registration(user.id, event_id)
     if existing:
-        msg = "You are already registered for this event."
+        msg = "Du bist bereits für dieses Event registriert."
         if update.callback_query:
             await update.callback_query.message.reply_text(msg)
         else:
@@ -394,12 +389,12 @@ async def ask_neuling(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     keyboard = [
-        [InlineKeyboardButton("Yes", callback_data='neuling_yes')],
-        [InlineKeyboardButton("No", callback_data='neuling_no')]
+        [InlineKeyboardButton("Ja", callback_data='neuling_yes')],
+        [InlineKeyboardButton("Nein", callback_data='neuling_no')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    msg = "Are you a 'Neuling' (Newbie)?"
+    msg = "Bist du ein 'Neuling'?"
     if update.callback_query:
         await update.callback_query.message.reply_text(msg, reply_markup=reply_markup)
     else:
@@ -412,18 +407,18 @@ async def neuling_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     context.user_data['is_neuling'] = (query.data == 'neuling_yes')
-    await query.edit_message_text(text=f"Neuling: {'Yes' if context.user_data['is_neuling'] else 'No'}")
+    await query.edit_message_text(text=f"Neuling: {'Ja' if context.user_data['is_neuling'] else 'Nein'}")
     
 
     
     keyboard = [
-        [InlineKeyboardButton("Yes", callback_data='partner_yes')],
-        [InlineKeyboardButton("No", callback_data='partner_no')]
+        [InlineKeyboardButton("Ja", callback_data='partner_yes')],
+        [InlineKeyboardButton("Nein", callback_data='partner_no')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.message.reply_text(
-        "Do you have a partner?",
+        "Bringst du eine weitere Person mit?",
         reply_markup=reply_markup
     )
     return ASK_PARTNER_CONFIRM
@@ -435,13 +430,13 @@ async def partner_confirm_response(update: Update, context: ContextTypes.DEFAULT
     has_partner = (query.data == 'partner_yes')
     
     if has_partner:
-        await query.edit_message_text("Do you have a partner? Yes")
+        await query.edit_message_text("Bringst du eine weitere Person mit? Ja")
         await query.message.reply_text(
-            "Please enter their Telegram username (starting with @) or their full name."
+            "Bitte gib den Telegram-Nutzernamen (beginnend mit @) oder den vollen Namen der Person ein."
         )
         return ASK_PARTNER_NAME
     else:
-        await query.edit_message_text("Do you have a partner? No")
+        await query.edit_message_text("Bringst du eine weitere Person mit? Nein")
         # No partner, proceed to finish registration
         return await finish_registration(update, context, partner_name=None)
 
@@ -452,7 +447,7 @@ async def partner_name_response(update: Update, context: ContextTypes.DEFAULT_TY
     if partner_name.startswith('/'):
         if partner_name == '/cancel':
             return await cancel(update, context)
-        await update.message.reply_text("Please enter a partner name. Do not use commands (except /cancel).")
+        await update.message.reply_text("Bitte gib den Namen der Person ein. Verwende keine Befehle (außer /cancel).")
         return ASK_PARTNER_NAME
         
     return await finish_registration(update, context, partner_name)
@@ -475,12 +470,12 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
             db.set_admin(user.id, event_id, True)
             
         msg = (
-            "✅ *Registration Successful!*\n\n"
-            "You have been added to the *PENDING* list.\n"
-            "You will be notified once the registration closes and seats are allocated."
+            "✅ *Registrierung erfolgreich!* ✅\n\n"
+            "📝 Du wurdest zur *WARTELISTE* hinzugefügt.\n\n"
+            "🔔 Du wirst benachrichtigt, sobald die Registrierung schließt und die Plätze vergeben sind!"
         )
         if partner_name:
-            msg += f"\n\nPartner registered: {partner_name}\n\n_Note: If your partner wants to receive notifications directly, please ask them to start the bot (@{context.bot.username})._"
+            msg += f"\n\n👥 Begleitung registriert: {partner_name}"
             
         if update.callback_query:
              await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
@@ -488,9 +483,9 @@ async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE
              await update.message.reply_text(msg, parse_mode='Markdown')
     else:
         if update.callback_query:
-             await update.callback_query.message.reply_text("An error occurred during registration.")
+             await update.callback_query.message.reply_text("Ein Fehler ist während der Registrierung aufgetreten.")
         else:
-             await update.message.reply_text("An error occurred during registration.")
+             await update.message.reply_text("Ein Fehler ist während der Registrierung aufgetreten.")
         
     return ConversationHandler.END
 
@@ -505,15 +500,15 @@ async def notify_next_waiting(context: ContextTypes.DEFAULT_TYPE, event_id):
     event = db.get_event(event_id)
     
     keyboard = [
-        [InlineKeyboardButton("Accept", callback_data=f'offer_accept_{event_id}')],
-        [InlineKeyboardButton("Deny", callback_data=f'offer_deny_{event_id}')]
+        [InlineKeyboardButton("Annehmen", callback_data=f'offer_accept_{event_id}')],
+        [InlineKeyboardButton("Ablehnen", callback_data=f'offer_deny_{event_id}')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
         await context.bot.send_message(
             chat_id=next_person['user_id'],
-            text=f"A spot has opened up for '{event['name']}'! Do you want to accept it?",
+            text=f"Ein Platz für '{event['name']}' ist frei geworden! Möchtest du ihn annehmen?",
             reply_markup=reply_markup
         )
     except Exception as e:
@@ -531,15 +526,15 @@ async def offer_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg = db.get_registration(user.id, event_id)
     
     if not reg or reg['status'] != 'OFFERED':
-        await query.edit_message_text("This offer is no longer valid.")
+        await query.edit_message_text("Dieses Angebot ist nicht mehr gültig.")
         return
 
     if action == 'offer_accept':
         db.update_status(user.id, event_id, 'ACCEPTED')
-        await query.edit_message_text("You have accepted the spot! See you there.")
+        await query.edit_message_text("Du hast den Platz angenommen! Wir sehen uns.")
     else:
         db.update_status(user.id, event_id, 'DECLINED')
-        await query.edit_message_text("You have declined the spot.")
+        await query.edit_message_text("Du hast den Platz abgelehnt.")
         # Notify next
         await notify_next_waiting(context, event_id)
 
@@ -547,9 +542,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     regs = db.get_user_registrations(user.id)
     if not regs:
-        await update.message.reply_text("You are not registered for any events.")
+        await update.message.reply_text("Du bist für keine Events registriert.")
     else:
-        msg = "*Your Registrations:*\n"
+        msg = "*Deine Registrierungen:*\n"
         for r in regs:
             msg += f"- {r['event_name']}: {r['status']}\n"
         await update.message.reply_text(msg, parse_mode='Markdown')
@@ -561,7 +556,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     active_regs = [r for r in regs if r['status'] not in ['CANCELLED', 'DECLINED']]
     
     if not active_regs:
-        await update.message.reply_text("You have no active registrations to cancel.")
+        await update.message.reply_text("Du hast keine aktiven Registrierungen zum Stornieren.")
         return
 
     if len(active_regs) == 1:
@@ -571,7 +566,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for r in active_regs:
             keyboard.append([InlineKeyboardButton(r['event_name'], callback_data=f"cancel_{r['event_id']}")])
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("Select an event to cancel registration:", reply_markup=reply_markup)
+        await update.message.reply_text("Wähle ein Event zum Stornieren:", reply_markup=reply_markup)
 
 async def cancel_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -582,7 +577,7 @@ async def cancel_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reg = db.get_registration(user.id, event_id)
     
     if not reg:
-        await query.edit_message_text("Registration not found.")
+        await query.edit_message_text("Registrierung nicht gefunden.")
         return
         
     await perform_cancel(update, context, reg)
@@ -592,7 +587,7 @@ async def perform_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, reg
     event_id = reg['event_id']
     
     if reg['status'] == 'CANCELLED':
-        msg = "You are already cancelled."
+        msg = "Du bist bereits storniert."
         if update.callback_query:
             await update.callback_query.edit_message_text(msg)
         else:
@@ -602,7 +597,7 @@ async def perform_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, reg
     was_accepted = (reg['status'] == 'ACCEPTED')
     db.update_status(user_id, event_id, 'CANCELLED')
     
-    msg = "Registration cancelled."
+    msg = "Registrierung storniert."
     if update.callback_query:
         await update.callback_query.edit_message_text(msg)
     else:
@@ -612,7 +607,7 @@ async def perform_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, reg
         await notify_next_waiting(context, event_id)
 
 async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Registration cancelled.")
+    await update.message.reply_text("Registrierung abgebrochen.")
     return ConversationHandler.END
 
 if __name__ == '__main__':
