@@ -23,7 +23,7 @@ def init_db():
         name TEXT NOT NULL,
         date TEXT,
         is_open BOOLEAN DEFAULT 0,
-        seat_limit INTEGER DEFAULT 35
+        seat_limit INTEGER DEFAULT 4
     )''')
     
     # Registrations table

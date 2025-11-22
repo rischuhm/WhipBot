@@ -1,0 +1,14 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <rect width="512" height="512" fill="black"/>
+  <g transform="translate(77, 77) scale(0.7)">
+    <!-- Stylized WHIP circular motif -->
+    <path d="M256 50 C 142 50 50 142 50 256 C 50 370 142 462 256 462 C 370 462 462 370 462 256" stroke="white" stroke-width="25" fill="none" stroke-linecap="round"/>
+    
+    <!-- Stylized Wizard Hat integrated -->
+    <path d="M180 256 L 256 100 L 332 256 Z" stroke="white" stroke-width="20" fill="none" stroke-linejoin="round"/>
+    <path d="M150 256 L 362 256" stroke="white" stroke-width="20" fill="none" stroke-linecap="round"/>
+    
+    <!-- Graffiti-style text elements roughly mimicking the original style -->
+    <path d="M300 300 L 320 400 L 350 350 L 380 400 L 400 300" stroke="white" stroke-width="15" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -18,7 +18,7 @@ logging.basicConfig(
 )
 
 # States for Registration Conversation
-ASK_EVENT, ASK_NEULING, ASK_PARTNER = range(3)
+ASK_EVENT, ASK_NEULING, ASK_PARTNER_CONFIRM, ASK_PARTNER_NAME = range(4)
 
 def find_partner(partner_name, all_registrations):
     if not partner_name:
@@ -35,9 +35,18 @@ def find_partner(partner_name, all_registrations):
             return reg
     return None
 
+def escape_md(text):
+    if not text:
+        return ""
+    return text.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
 async def create_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
+        return
+    
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("Please perform admin actions in a private chat.")
         return
     
     if not context.args:
@@ -45,12 +54,17 @@ async def create_event(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
         
     name = " ".join(context.args)
-    event_id = db.create_event(name)
-    await update.message.reply_text(f"Event '{name}' created with ID {event_id}.")
+    # Default seat limit is 4 for testing (was 35)
+    event_id = db.create_event(name, seat_limit=4)
+    await update.message.reply_text(f"Event '{name}' created with ID {event_id}. Seat limit: 4")
 
 async def admin_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
+        return
+
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("Please perform admin actions in a private chat.")
         return
     
     events = db.get_events()
@@ -71,6 +85,10 @@ async def admin_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def admin_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
+        return
+
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("Please perform admin actions in a private chat.")
         return
     
     events = db.get_events()
@@ -116,14 +134,33 @@ async def admin_event_response(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.edit_message_text(f"No registrations found for '{event['name']}'.")
             return
 
-        msg = f"📋 *Registrations for {event['name']}:*\n\n"
+        count = 0
+        for reg in registrations:
+            count += 1
+            if reg['partner_name']:
+                # Check if partner is registered separately to avoid double counting
+                partner_reg = find_partner(reg['partner_name'], registrations)
+                if not partner_reg:
+                    count += 1
+                # If partner IS registered, they will be counted when their own entry is processed
+                # However, we need to be careful not to double count if we iterate all.
+                # Actually, if both registered, they are 2 entries = 2 count.
+                # If only one registered + partner name, that is 1 entry but should be 2 count.
+                # Correct logic:
+                # If partner_name is present AND partner is NOT in the list as a separate user, add +1.
+        
+        msg = f"📋 *Registrations for {event['name']} ({count} seats):*\n\n"
         for reg in registrations:
             icon = "✅" if reg['status'] == 'ACCEPTED' else "⏳" if reg['status'] == 'PENDING' else "❌" if reg['status'] == 'CANCELLED' else "📝"
-            partner = f" (Partner: {reg['partner_name']})" if reg['partner_name'] else ""
+            safe_name = escape_md(reg['full_name'])
+            safe_username = escape_md(reg['username'])
+            safe_partner = escape_md(reg['partner_name'])
+            
+            partner_str = f" (Partner: {safe_partner})" if safe_partner else ""
             neuling = " [Neuling]" if reg['is_neuling'] else ""
             admin = " [Admin]" if reg['is_admin'] else ""
             
-            line = f"{icon} {reg['full_name']} (@{reg['username']}){partner}{neuling}{admin} - {reg['status']}\n"
+            line = f"{icon} {safe_name} (@{safe_username}){partner_str}{neuling}{admin} - {reg['status']}\n"
             if len(msg) + len(line) > 4000:
                 logging.info(f"Sending chunk: {msg}")
                 await context.bot.send_message(chat_id=query.message.chat_id, text=msg, parse_mode='Markdown')
@@ -161,18 +198,36 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # 1. Admins
     admins = [r for r in pending if r['is_admin']]
     for r in admins:
-        accept(r)
-        partner = find_partner(r['partner_name'], pending)
-        if partner:
-            accept(partner)
+        if r['user_id'] in accepted_ids:
+            continue
+            
+        partner_reg = find_partner(r['partner_name'], pending)
+        if r['partner_name'] and not partner_reg:
+             # Partner not registered, but counts as seat
+             accept(r)
+             seats_taken += 1
+        elif partner_reg:
+             accept(r)
+             accept(partner_reg)
+        else:
+             accept(r)
             
     # 2. Neulings
     neulings = [r for r in pending if r['is_neuling'] and r['user_id'] not in accepted_ids]
     for r in neulings:
-        accept(r)
-        partner = find_partner(r['partner_name'], pending)
-        if partner:
-            accept(partner)
+        if r['user_id'] in accepted_ids:
+            continue
+
+        partner_reg = find_partner(r['partner_name'], pending)
+        if r['partner_name'] and not partner_reg:
+             # Partner not registered, but counts as seat
+             accept(r)
+             seats_taken += 1
+        elif partner_reg:
+             accept(r)
+             accept(partner_reg)
+        else:
+             accept(r)
             
     # 3. Random
     remaining = [r for r in pending if r['user_id'] not in accepted_ids]
@@ -185,19 +240,32 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if r['user_id'] in accepted_ids:
             continue
             
-        partner = find_partner(r['partner_name'], pending)
+        # Check if user has a partner (registered or just named)
+        has_partner = bool(r['partner_name'])
         
-        if partner and partner['user_id'] not in accepted_ids:
-            # Check if both fit
-            if seats_taken + 2 <= seats_limit:
-                accept(r)
-                accept(partner)
+        if has_partner:
+            # Check if partner is also registered
+            partner_reg = find_partner(r['partner_name'], pending)
+            
+            if partner_reg:
+                # Partner is registered separately
+                if partner_reg['user_id'] in accepted_ids:
+                    # Partner already accepted, just accept this one
+                    if seats_taken + 1 <= seats_limit:
+                        accept(r)
+                else:
+                    # Both need acceptance
+                    if seats_taken + 2 <= seats_limit:
+                        accept(r)
+                        accept(partner_reg)
             else:
-                # Skip both if they don't fit? 
-                # Or accept one? User says "partner is also chosen". 
-                # Implies all or nothing. We skip to waiting list.
-                continue
+                # Partner is NOT registered (just a name)
+                # We still count them as a seat!
+                if seats_taken + 2 <= seats_limit:
+                    accept(r)
+                    seats_taken += 1 # Extra seat for the non-registered partner
         else:
+            # Single user
             if seats_taken + 1 <= seats_limit:
                 accept(r)
     
@@ -213,7 +281,17 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
     # Notify Accepted
     for uid in accepted_ids:
         try:
-            await context.bot.send_message(chat_id=uid, text=f"Congratulations! You have a seat for '{event['name']}'.")
+            # Find registration to check for partner
+            reg = next((r for r in pending if r['user_id'] == uid), None)
+            msg = f"Congratulations! You have a seat for '{event['name']}'."
+            
+            if reg and reg['partner_name']:
+                partner_reg = find_partner(reg['partner_name'], pending)
+                if not partner_reg:
+                    # Partner was not registered, so we inform the user they are both in
+                    msg += f"\n\nYour partner ({reg['partner_name']}) is also accepted!"
+            
+            await context.bot.send_message(chat_id=uid, text=msg)
         except Exception as e:
             logging.error(f"Failed to send message to {uid}: {e}")
             
@@ -222,6 +300,10 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
+        return
+
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("Please perform admin actions in a private chat.")
         return
 
     events = db.get_events()
@@ -237,6 +319,15 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Select an event to view registrations:", reply_markup=reply_markup)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args and context.args[0] == 'register':
+        # Trigger registration flow manually
+        # We need to call register(update, context) but return the state
+        # However, start is not the entry point of the ConversationHandler in the current setup.
+        # We can't easily jump into the ConversationHandler from here without refactoring.
+        # Simplest way: Tell them to type /register now that they are here.
+        await update.message.reply_text("Welcome! Please type /register to start the registration process.")
+        return
+
     await update.message.reply_text(
         "Welcome to the Event Planner Bot!\n"
         "Use /register to sign up for the event.\n"
@@ -247,6 +338,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     
+    if update.effective_chat.type != 'private':
+        bot_username = context.bot.username
+        await update.message.reply_text(f"Please register with me privately: t.me/{bot_username}?start=register")
+        return ConversationHandler.END
+
     events = db.get_events()
     open_events = [e for e in events if e['is_open']]
     
@@ -318,27 +414,50 @@ async def neuling_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['is_neuling'] = (query.data == 'neuling_yes')
     await query.edit_message_text(text=f"Neuling: {'Yes' if context.user_data['is_neuling'] else 'No'}")
     
-    await query.message.reply_text(
-        "Do you have a partner? Please enter their Telegram username (starting with @) or their full name.\n"
-        "Type 'No' if you are alone."
-    )
-    return ASK_PARTNER
 
-async def partner_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    keyboard = [
+        [InlineKeyboardButton("Yes", callback_data='partner_yes')],
+        [InlineKeyboardButton("No", callback_data='partner_no')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.message.reply_text(
+        "Do you have a partner?",
+        reply_markup=reply_markup
+    )
+    return ASK_PARTNER_CONFIRM
+
+async def partner_confirm_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    has_partner = (query.data == 'partner_yes')
+    
+    if has_partner:
+        await query.edit_message_text("Do you have a partner? Yes")
+        await query.message.reply_text(
+            "Please enter their Telegram username (starting with @) or their full name."
+        )
+        return ASK_PARTNER_NAME
+    else:
+        await query.edit_message_text("Do you have a partner? No")
+        # No partner, proceed to finish registration
+        return await finish_registration(update, context, partner_name=None)
+
+async def partner_name_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
     partner_name = update.message.text
     
     # Handle commands manually since we are capturing all TEXT
     if partner_name.startswith('/'):
         if partner_name == '/cancel':
             return await cancel(update, context)
-        # Ignore other commands or treat as name? 
-        # Let's warn them.
-        await update.message.reply_text("Please enter a partner name or 'No'. Do not use commands (except /cancel).")
-        return ASK_PARTNER
-    
-    if partner_name.lower() in ['no', 'none', 'n/a', '-']:
-        partner_name = None
-    
+        await update.message.reply_text("Please enter a partner name. Do not use commands (except /cancel).")
+        return ASK_PARTNER_NAME
+        
+    return await finish_registration(update, context, partner_name)
+
+async def finish_registration(update: Update, context: ContextTypes.DEFAULT_TYPE, partner_name):
     user = update.effective_user
     is_neuling = context.user_data.get('is_neuling', False)
     event_id = context.user_data.get('event_id')
@@ -357,15 +476,21 @@ async def partner_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         msg = (
             "✅ *Registration Successful!*\n\n"
-            "You have been added to the **PENDING** list.\n"
+            "You have been added to the *PENDING* list.\n"
             "You will be notified once the registration closes and seats are allocated."
         )
         if partner_name:
-            msg += f"\n\nPartner registered: {partner_name}"
+            msg += f"\n\nPartner registered: {partner_name}\n\n_Note: If your partner wants to receive notifications directly, please ask them to start the bot (@{context.bot.username})._"
             
-        await update.message.reply_text(msg, parse_mode='Markdown')
+        if update.callback_query:
+             await update.callback_query.message.reply_text(msg, parse_mode='Markdown')
+        else:
+             await update.message.reply_text(msg, parse_mode='Markdown')
     else:
-        await update.message.reply_text("An error occurred during registration.")
+        if update.callback_query:
+             await update.callback_query.message.reply_text("An error occurred during registration.")
+        else:
+             await update.message.reply_text("An error occurred during registration.")
         
     return ConversationHandler.END
 
@@ -504,7 +629,8 @@ if __name__ == '__main__':
         states={
             ASK_EVENT: [CallbackQueryHandler(event_response, pattern='^event_')],
             ASK_NEULING: [CallbackQueryHandler(neuling_response)],
-            ASK_PARTNER: [MessageHandler(filters.TEXT, partner_response)]
+            ASK_PARTNER_CONFIRM: [CallbackQueryHandler(partner_confirm_response)],
+            ASK_PARTNER_NAME: [MessageHandler(filters.TEXT, partner_name_response)]
         },
         fallbacks=[CommandHandler('cancel', cancel_conversation)]
     )
