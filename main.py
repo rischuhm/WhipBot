@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, ConversationHandler, CallbackQueryHandler, MessageHandler, filters
 import database as db
+import mock_users
 
 # Load environment variables
 load_dotenv()
@@ -149,7 +150,8 @@ async def admin_event_response(update: Update, context: ContextTypes.DEFAULT_TYP
                 # Correct logic:
                 # If partner_name is present AND partner is NOT in the list as a separate user, add +1.
         
-        msg = f"📋 *Registrierungen für {event['name']} ({count} Plätze):*\n\n"
+        safe_event_name = escape_md(event['name'])
+        msg = f"📋 *Registrierungen für {safe_event_name} ({count} Plätze):*\n\n"
         for reg in registrations:
             icon = "✅" if reg['status'] == 'ACCEPTED' else "⏳" if reg['status'] == 'PENDING' else "❌" if reg['status'] == 'CANCELLED' else "📝"
             safe_name = escape_md(reg['full_name'])
@@ -274,7 +276,8 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if r['user_id'] not in accepted_ids:
             db.update_status(r['user_id'], event_id, 'WAITING')
             try:
-                await context.bot.send_message(chat_id=r['user_id'], text=f"⏳ Registrierung für '{event['name']}' geschlossen.\n\nDu bist auf der *WARTELISTE*. Wir benachrichtigen dich, falls ein Platz frei wird! 🤞")
+                safe_event_name = escape_md(event['name'])
+                await context.bot.send_message(chat_id=r['user_id'], text=f"⏳ Registrierung für '{safe_event_name}' geschlossen.\n\nDu bist auf der *WARTELISTE*. Wir benachrichtigen dich, falls ein Platz frei wird! 🤞", parse_mode='Markdown')
             except Exception as e:
                 logging.error(f"Failed to send message to {r['user_id']}: {e}")
 
@@ -283,19 +286,30 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             # Find registration to check for partner
             reg = next((r for r in pending if r['user_id'] == uid), None)
-            msg = f"🎉 *Glückwunsch!* 🎉\n\nDu hast einen Platz für '{event['name']}'! Wir freuen uns auf dich! 🙌"
+            safe_event_name = escape_md(event['name'])
+            msg = f"🎉 *Glückwunsch!* 🎉\n\nDu hast einen Platz für '{safe_event_name}'! Wir freuen uns auf dich! 🙌"
             
             if reg and reg['partner_name']:
                 partner_reg = find_partner(reg['partner_name'], pending)
                 if not partner_reg:
                     # Partner was not registered, so we inform the user they are both in
-                    msg += f"\n\n👥 Deine Begleitung ({reg['partner_name']}) ist auch dabei!"
+                    safe_partner = escape_md(reg['partner_name'])
+                    msg += f"\n\n👥 Deine Begleitung ({safe_partner}) ist auch dabei!"
             
-            await context.bot.send_message(chat_id=uid, text=msg)
+            await context.bot.send_message(chat_id=uid, text=msg, parse_mode='Markdown')
         except Exception as e:
             logging.error(f"Failed to send message to {uid}: {e}")
-            
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Zuteilung für '{event['name']}' abgeschlossen. {seats_taken} Plätze vergeben.")
+    
+    # Notify admin that allocation is complete
+    try:
+        safe_event_name = escape_md(event['name'])
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text=f"Zuteilung für '{safe_event_name}' abgeschlossen. {seats_taken} Plätze vergeben.",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logging.error(f"Failed to send completion message to admin: {e}")
 
 async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -318,17 +332,125 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("Wähle ein Event, um die Registrierungen zu sehen:", reply_markup=reply_markup)
 
+async def mock_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to create mock users for testing."""
+    user = update.effective_user
+    if user.id not in ADMIN_IDS:
+        return
+    
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("Please perform admin actions in a private chat.")
+        return
+    
+    # Parse arguments: /mock_users <count> [event_id] [neuling_prob] [partner_prob]
+    if not context.args:
+        await update.message.reply_text(
+            "Verwendung: /mock_users <anzahl> [event_id] [neuling_wahrscheinlichkeit] [partner_wahrscheinlichkeit]\n\n"
+            "Beispiele:\n"
+            "/mock_users 10 - Erstellt 10 Mock-User für das erste offene Event\n"
+            "/mock_users 5 1 - Erstellt 5 Mock-User für Event ID 1\n"
+            "/mock_users 10 1 0.5 0.3 - 10 User, Event 1, 50% Neulings, 30% mit Partner"
+        )
+        return
+    
+    try:
+        count = int(context.args[0])
+        if count < 1 or count > 100:
+            await update.message.reply_text("Anzahl muss zwischen 1 und 100 liegen.")
+            return
+        
+        event_id = None
+        if len(context.args) > 1:
+            event_id = int(context.args[1])
+        
+        neuling_prob = 0.3
+        if len(context.args) > 2:
+            neuling_prob = float(context.args[2])
+            if not 0 <= neuling_prob <= 1:
+                await update.message.reply_text("Neuling-Wahrscheinlichkeit muss zwischen 0 und 1 liegen.")
+                return
+        
+        partner_prob = 0.4
+        if len(context.args) > 3:
+            partner_prob = float(context.args[3])
+            if not 0 <= partner_prob <= 1:
+                await update.message.reply_text("Partner-Wahrscheinlichkeit muss zwischen 0 und 1 liegen.")
+                return
+        
+        # Check if event exists and is open (if specified)
+        if event_id:
+            event = db.get_event(event_id)
+            if not event:
+                await update.message.reply_text(f"Event mit ID {event_id} nicht gefunden.")
+                return
+            if not event['is_open']:
+                await update.message.reply_text(f"Event '{event['name']}' ist nicht geöffnet.")
+                return
+        
+        # Send status message
+        status_msg = await update.message.reply_text(
+            f"Erstelle {count} Mock-User...\n"
+            f"Event ID: {event_id if event_id else 'Auto'}\n"
+            f"Neuling-Wahrscheinlichkeit: {neuling_prob*100:.0f}%\n"
+            f"Partner-Wahrscheinlichkeit: {partner_prob*100:.0f}%"
+        )
+        
+        # Create mock users
+        results = await mock_users.create_mock_users(
+            count=count,
+            context=context,
+            event_id=event_id,
+            neuling_probability=neuling_prob,
+            partner_probability=partner_prob
+        )
+        
+        # Report results
+        success_count = results['success']
+        failed_count = results['failed']
+        
+        result_text = (
+            f"✅ Mock-User Erstellung abgeschlossen!\n\n"
+            f"Erfolgreich: {success_count}\n"
+            f"Fehlgeschlagen: {failed_count}\n\n"
+        )
+        
+        if failed_count > 0:
+            result_text += "Fehlgeschlagene Registrierungen:\n"
+            for detail in results['details']:
+                if not detail['success']:
+                    result_text += f"- {detail['full_name']} (ID: {detail['user_id']})\n"
+        
+        await status_msg.edit_text(result_text)
+        
+    except ValueError as e:
+        await update.message.reply_text(f"Ungültige Parameter: {e}")
+    except Exception as e:
+        logging.error(f"Error creating mock users: {e}", exc_info=True)
+        await update.message.reply_text(f"Fehler beim Erstellen der Mock-User: {e}")
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-
-    await update.message.reply_text(
+    # Check for open events
+    events = db.get_events()
+    open_events = [e for e in events if e['is_open']]
+    
+    welcome_text = (
         "Willkommen beim WHIP Wizard Bot! 🧙‍♂️\n\n"
         "Hier ist eine kurze Anleitung:\n"
         "1️⃣ **Registrieren**: Nutze /register, um dich für ein Event anzumelden. Du kannst angeben, ob du neu bist ('Neuling') und ob du jemanden mitbringst.\n"
         "2️⃣ **Status prüfen**: Mit /status siehst du, für welche Events du angemeldet bist und ob du einen Platz hast.\n"
         "3️⃣ **Abmelden**: Falls du doch nicht kannst, nutze /cancel, um deinen Platz freizugeben.\n\n"
-        "Viel Spaß!"
     )
+    
+    if open_events:
+        welcome_text += "📅 **Aktuell offene Events:**\n"
+        for e in open_events:
+            safe_name = escape_md(e['name'])
+            welcome_text += f"  • {safe_name}\n"
+        welcome_text += "\nNutze /register, um dich anzumelden!"
+    else:
+        welcome_text += "Aktuell sind keine Events für die Registrierung geöffnet."
+    
+    await update.message.reply_text(welcome_text, parse_mode='Markdown')
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -549,6 +671,31 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             msg += f"- {r['event_name']}: {r['status']}\n"
         await update.message.reply_text(msg, parse_mode='Markdown')
 
+async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all open events."""
+    events = db.get_events()
+    open_events = [e for e in events if e['is_open']]
+    closed_events = [e for e in events if not e['is_open']]
+    
+    msg = "📅 *Events:*\n\n"
+    
+    if open_events:
+        msg += "✅ *Offene Events:*\n"
+        for e in open_events:
+            safe_name = escape_md(e['name'])
+            msg += f"  • {safe_name}\n"
+        msg += "\nNutze /register, um dich anzumelden!\n\n"
+    else:
+        msg += "Aktuell sind keine Events für die Registrierung geöffnet.\n\n"
+    
+    if closed_events:
+        msg += "❌ *Geschlossene Events:*\n"
+        for e in closed_events:
+            safe_name = escape_md(e['name'])
+            msg += f"  • {safe_name}\n"
+    
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     regs = db.get_user_registrations(user.id)
@@ -634,9 +781,11 @@ if __name__ == '__main__':
     application.add_handler(reg_handler)
     application.add_handler(CommandHandler('cancel', cancel))
     application.add_handler(CommandHandler('status', status))
+    application.add_handler(CommandHandler('events', list_events))
     application.add_handler(CommandHandler('admin_open', admin_open))
     application.add_handler(CommandHandler('admin_close', admin_close))
     application.add_handler(CommandHandler('admin_list', admin_list))
+    application.add_handler(CommandHandler('mock_users', mock_users_command))
     application.add_handler(CommandHandler('create_event', create_event))
     application.add_handler(CallbackQueryHandler(admin_event_response, pattern='^admin_'))
     application.add_handler(CallbackQueryHandler(offer_response, pattern='^offer_'))
