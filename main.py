@@ -150,7 +150,8 @@ async def admin_event_response(update: Update, context: ContextTypes.DEFAULT_TYP
                 # Correct logic:
                 # If partner_name is present AND partner is NOT in the list as a separate user, add +1.
         
-        msg = f"📋 *Registrierungen für {event['name']} ({count} Plätze):*\n\n"
+        safe_event_name = escape_md(event['name'])
+        msg = f"📋 *Registrierungen für {safe_event_name} ({count} Plätze):*\n\n"
         for reg in registrations:
             icon = "✅" if reg['status'] == 'ACCEPTED' else "⏳" if reg['status'] == 'PENDING' else "❌" if reg['status'] == 'CANCELLED' else "📝"
             safe_name = escape_md(reg['full_name'])
@@ -275,7 +276,8 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if r['user_id'] not in accepted_ids:
             db.update_status(r['user_id'], event_id, 'WAITING')
             try:
-                await context.bot.send_message(chat_id=r['user_id'], text=f"⏳ Registrierung für '{event['name']}' geschlossen.\n\nDu bist auf der *WARTELISTE*. Wir benachrichtigen dich, falls ein Platz frei wird! 🤞")
+                safe_event_name = escape_md(event['name'])
+                await context.bot.send_message(chat_id=r['user_id'], text=f"⏳ Registrierung für '{safe_event_name}' geschlossen.\n\nDu bist auf der *WARTELISTE*. Wir benachrichtigen dich, falls ein Platz frei wird! 🤞", parse_mode='Markdown')
             except Exception as e:
                 logging.error(f"Failed to send message to {r['user_id']}: {e}")
 
@@ -284,19 +286,30 @@ async def perform_allocation(update: Update, context: ContextTypes.DEFAULT_TYPE,
         try:
             # Find registration to check for partner
             reg = next((r for r in pending if r['user_id'] == uid), None)
-            msg = f"🎉 *Glückwunsch!* 🎉\n\nDu hast einen Platz für '{event['name']}'! Wir freuen uns auf dich! 🙌"
+            safe_event_name = escape_md(event['name'])
+            msg = f"🎉 *Glückwunsch!* 🎉\n\nDu hast einen Platz für '{safe_event_name}'! Wir freuen uns auf dich! 🙌"
             
             if reg and reg['partner_name']:
                 partner_reg = find_partner(reg['partner_name'], pending)
                 if not partner_reg:
                     # Partner was not registered, so we inform the user they are both in
-                    msg += f"\n\n👥 Deine Begleitung ({reg['partner_name']}) ist auch dabei!"
+                    safe_partner = escape_md(reg['partner_name'])
+                    msg += f"\n\n👥 Deine Begleitung ({safe_partner}) ist auch dabei!"
             
-            await context.bot.send_message(chat_id=uid, text=msg)
+            await context.bot.send_message(chat_id=uid, text=msg, parse_mode='Markdown')
         except Exception as e:
             logging.error(f"Failed to send message to {uid}: {e}")
-            
-    await context.bot.send_message(chat_id=update.effective_chat.id, text=f"Zuteilung für '{event['name']}' abgeschlossen. {seats_taken} Plätze vergeben.")
+    
+    # Notify admin that allocation is complete
+    try:
+        safe_event_name = escape_md(event['name'])
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id, 
+            text=f"Zuteilung für '{safe_event_name}' abgeschlossen. {seats_taken} Plätze vergeben.",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logging.error(f"Failed to send completion message to admin: {e}")
 
 async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -431,7 +444,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if open_events:
         welcome_text += "📅 **Aktuell offene Events:**\n"
         for e in open_events:
-            welcome_text += f"  • {e['name']}\n"
+            safe_name = escape_md(e['name'])
+            welcome_text += f"  • {safe_name}\n"
         welcome_text += "\nNutze /register, um dich anzumelden!"
     else:
         welcome_text += "Aktuell sind keine Events für die Registrierung geöffnet."
@@ -668,7 +682,8 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if open_events:
         msg += "✅ *Offene Events:*\n"
         for e in open_events:
-            msg += f"  • {e['name']}\n"
+            safe_name = escape_md(e['name'])
+            msg += f"  • {safe_name}\n"
         msg += "\nNutze /register, um dich anzumelden!\n\n"
     else:
         msg += "Aktuell sind keine Events für die Registrierung geöffnet.\n\n"
@@ -676,7 +691,8 @@ async def list_events(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if closed_events:
         msg += "❌ *Geschlossene Events:*\n"
         for e in closed_events:
-            msg += f"  • {e['name']}\n"
+            safe_name = escape_md(e['name'])
+            msg += f"  • {safe_name}\n"
     
     await update.message.reply_text(msg, parse_mode='Markdown')
 

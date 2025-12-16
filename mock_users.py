@@ -139,7 +139,8 @@ class MockUpdate:
         if callback_data:
             self.callback_query = MockCallbackQuery(user, chat, callback_data)
             self.message = self.callback_query.message
-        elif message_text:
+        elif message_text is not None:
+            # Use 'is not None' instead of truthiness check to handle empty strings
             self.message = MockMessage(user, chat, message_text)
         
         self._effective_user = user
@@ -152,6 +153,48 @@ class MockUpdate:
     @property
     def effective_chat(self):
         return self._effective_chat
+
+
+def _ensure_user_data_initialized(context: ContextTypes.DEFAULT_TYPE, mock_user: MockUser):
+    """
+    Ensure that context._user_data has an entry for the mock user before calling handlers.
+    This ensures that when handlers access context.user_data, they get the correct user's data.
+    
+    Args:
+        context: The bot context
+        mock_user: The mock user whose data should be initialized
+    """
+    if hasattr(context, '_user_data') and isinstance(context._user_data, dict):
+        if mock_user.user_id not in context._user_data:
+            context._user_data[mock_user.user_id] = {}
+    elif hasattr(context, 'set_user'):
+        # For custom mock contexts (like in test scripts), use set_user method
+        context.set_user(mock_user.user_id)
+
+
+def _get_mock_user_data(context: ContextTypes.DEFAULT_TYPE, mock_user: MockUser) -> dict:
+    """
+    Get user_data for a specific mock user, ensuring we access the correct user's data
+    even when context was created with a different user (e.g., admin).
+    
+    Args:
+        context: The bot context
+        mock_user: The mock user whose data we want to access
+    
+    Returns:
+        Dictionary containing the mock user's user_data
+    """
+    # Try to access internal _user_data dict directly by user_id
+    if hasattr(context, '_user_data') and isinstance(context._user_data, dict):
+        return context._user_data.get(mock_user.user_id, {})
+    elif hasattr(context, 'set_user'):
+        # For custom mock contexts (like in test scripts), use set_user method
+        context.set_user(mock_user.user_id)
+        return context.user_data if hasattr(context, 'user_data') else {}
+    else:
+        # Fallback: try to get via property (may return wrong user's data)
+        # This is less reliable but better than nothing
+        return context.user_data if hasattr(context, 'user_data') else {}
 
 
 async def simulate_registration(mock_user: MockUser, context: ContextTypes.DEFAULT_TYPE,
@@ -179,21 +222,47 @@ async def simulate_registration(mock_user: MockUser, context: ContextTypes.DEFAU
                 return False
         
         # Initialize user data for this mock user
-        # Set the current user in context if it supports it
-        if hasattr(context, 'set_user'):
-            context.set_user(mock_user.user_id)
-        
-        # Clear user_data for this user
-        if hasattr(context, 'user_data') and context.user_data is not None:
-            context.user_data.clear()
-        else:
-            # Fallback: create a simple dict
-            if not hasattr(context, '_user_data'):
-                context._user_data = {}
-            context.user_data = context._user_data
+        # IMPORTANT: When reusing the same context object for multiple mock users,
+        # we must explicitly clear the user_data for each mock user to prevent data
+        # from one user corrupting another user's registration flow.
+        # 
+        # The issue: In python-telegram-bot, context.user_data is a property that
+        # returns data keyed by update.effective_user.id. However, when we access
+        # context.user_data directly in our code (not in a handler), it may use
+        # the context's original user ID (e.g., the admin), not the mock user's ID.
+        # 
+        # Solution: We need to explicitly clear user_data for the mock user's ID.
+        # Since context.user_data internally uses a dict keyed by user_id, we can
+        # access and clear the mock user's data by temporarily setting the context's
+        # effective_user, or by directly accessing the internal storage.
+        # 
+        # The safest approach: Clear user_data right before calling handlers,
+        # ensuring each mock user starts with a clean state. We'll do this by
+        # accessing the user_data that handlers will use (based on update.effective_user.id).
         
         # Step 1: Start registration with /register command
         update = MockUpdate(mock_user, message_text="/register")
+        
+        # CRITICAL: Ensure context.user_data property correctly resolves to mock user's data
+        # In python-telegram-bot, context.user_data is a property that should resolve based on
+        # update.effective_user.id. However, when reusing a context created for a different user
+        # (e.g., admin), we must ensure the internal _user_data dict is properly initialized
+        # and cleared for each mock user.
+        # 
+        # The handlers access context.user_data, which internally uses context._user_data[user_id].
+        # We need to ensure that when handlers are called with our MockUpdate, they get the
+        # correct user_data dict for the mock user's ID.
+        # 
+        # Solution: Initialize and clear the mock user's data dict in context._user_data
+        # before calling handlers. The handlers should then correctly resolve user_data based
+        # on update.effective_user.id, but we ensure the dict exists and is clean.
+        _ensure_user_data_initialized(context, mock_user)
+        
+        # Clear any existing data for this mock user to ensure clean state
+        if hasattr(context, '_user_data') and isinstance(context._user_data, dict):
+            if mock_user.user_id in context._user_data:
+                context._user_data[mock_user.user_id].clear()
+        
         result = await register(update, context)
         
         # Check if we need to select an event
@@ -216,6 +285,8 @@ async def simulate_registration(mock_user: MockUser, context: ContextTypes.DEFAU
                 selected_event = open_events[0]
             
             # Simulate event selection callback
+            _ensure_user_data_initialized(context, mock_user)
+            
             update = MockUpdate(mock_user, callback_data=f"event_{selected_event['id']}")
             result = await event_response(update, context)
         elif result == ConversationHandler.END:
@@ -224,18 +295,24 @@ async def simulate_registration(mock_user: MockUser, context: ContextTypes.DEFAU
             return False
         elif result == ASK_NEULING:
             # Single event - already selected, verify event_id if provided
-            if event_id and context.user_data.get('event_id') != event_id:
-                logger.error(f"Event mismatch for mock user {mock_user.user_id}: expected {event_id}, got {context.user_data.get('event_id')}")
+            # Access user_data directly by user_id to avoid getting admin's data
+            mock_user_data = _get_mock_user_data(context, mock_user)
+            if event_id and mock_user_data.get('event_id') != event_id:
+                logger.error(f"Event mismatch for mock user {mock_user.user_id}: expected {event_id}, got {mock_user_data.get('event_id')}")
                 return False
         
         # Step 2: Answer neuling question
         if result == ASK_NEULING:
+            _ensure_user_data_initialized(context, mock_user)
+            
             callback_data = 'neuling_yes' if mock_user.is_neuling else 'neuling_no'
             update = MockUpdate(mock_user, callback_data=callback_data)
             result = await neuling_response(update, context)
         
         # Step 3: Answer partner question
         if result == ASK_PARTNER_CONFIRM:
+            _ensure_user_data_initialized(context, mock_user)
+            
             has_partner = mock_user.partner_name is not None
             callback_data = 'partner_yes' if has_partner else 'partner_no'
             update = MockUpdate(mock_user, callback_data=callback_data)
@@ -243,13 +320,17 @@ async def simulate_registration(mock_user: MockUser, context: ContextTypes.DEFAU
         
         # Step 4: Provide partner name if needed
         if result == ASK_PARTNER_NAME:
+            _ensure_user_data_initialized(context, mock_user)
+            
             update = MockUpdate(mock_user, message_text=mock_user.partner_name or "")
             result = await partner_name_response(update, context)
         
         # Step 5: Finish registration
         if result == ConversationHandler.END:
             # Check if registration was successful
-            event_id_used = context.user_data.get('event_id')
+            # Access user_data directly by user_id to avoid getting admin's data
+            mock_user_data = _get_mock_user_data(context, mock_user)
+            event_id_used = mock_user_data.get('event_id')
             if event_id_used:
                 reg = db.get_registration(mock_user.user_id, event_id_used)
                 if reg:
@@ -281,6 +362,25 @@ async def create_mock_users(count: int, context: ContextTypes.DEFAULT_TYPE,
     Returns:
         Dictionary with success count, failure count, and details
     """
+    # Find the highest existing mock user ID to avoid duplicates
+    # IMPORTANT: Always check ALL events, regardless of event_id parameter.
+    # The event_id parameter only determines which event to register new users for,
+    # not which events to search for existing mock user IDs. This prevents duplicate
+    # IDs when mock users exist in different events.
+    all_regs = []
+    all_events = db.get_events()
+    for event in all_events:
+        regs = db.get_event_registrations(event['id'])
+        all_regs.extend(regs)
+    
+    max_mock_id = _MOCK_USER_ID_COUNTER - 1  # Start from base - 1
+    for reg in all_regs:
+        if reg['user_id'] >= _MOCK_USER_ID_COUNTER:
+            max_mock_id = max(max_mock_id, reg['user_id'])
+    
+    # Calculate starting index (how many mock users already exist)
+    start_index = max_mock_id - _MOCK_USER_ID_COUNTER + 1
+    
     results = {
         'success': 0,
         'failed': 0,
@@ -288,7 +388,8 @@ async def create_mock_users(count: int, context: ContextTypes.DEFAULT_TYPE,
     }
     
     for i in range(count):
-        mock_user = MockUser.create_random(i, neuling_probability, partner_probability)
+        # Use start_index + i to ensure unique IDs across multiple calls
+        mock_user = MockUser.create_random(start_index + i, neuling_probability, partner_probability)
         success = await simulate_registration(mock_user, context, event_id)
         
         if success:
